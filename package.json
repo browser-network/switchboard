@@ -1,6 +1,6 @@
 {
   "name": "@browser-network/switchboard",
-  "version": "0.0.0",
+  "version": "0.0.1",
   "description": "The switching server required for the onboarding of new nodes into a @browser-network/network",
   "main": "dist/index.js",
   "bin": "dist/index.js",
