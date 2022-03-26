@@ -1,0 +1,44 @@
+{
+  "name": "@browser-network/switchboard",
+  "version": "0.0.0",
+  "description": "The switching server required for the onboarding of new nodes into a @browser-network/network",
+  "main": "dist/index.js",
+  "bin": "dist/index.js",
+  "engine": {
+    "node": ">=8.0.0"
+  },
+  "scripts": {
+    "build": "shx rm -rf dist && tsc",
+    "start": "ts-node index.ts",
+    "start:dev": "nodemon -e ts -x 'npm run start'",
+    "release": "npm run build && np --no-tests --no-yarn --message=\"New release! Version: %s\""
+  },
+  "repository": {
+    "type": "git",
+    "url": "git@github.com:browser-network/switchboard.git"
+  },
+  "files": [
+    "dist/**/*"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "webrtc",
+    "signal",
+    "browser-network",
+    "network",
+    "distributed",
+    "decentralized"
+  ],
+  "author": "Aaron Sullivan <aasullivan1618@gmail.com>",
+  "bugs": {
+    "url": "https://github.com/browser-network/switchboard/issues"
+  },
+  "devDependencies": {
+    "np": "^7.6.1",
+    "shx": "^0.3.4",
+    "ts-node": "^10.7.0",
+    "typescript": "^4.6.2"
+  }
+}

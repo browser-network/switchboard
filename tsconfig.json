@@ -1,0 +1,31 @@
+{
+  "compilerOptions": {
+    "allowUnreachableCode": false,
+    "allowUnusedLabels": false,
+    "declaration": false,
+    "forceConsistentCasingInFileNames": true,
+    "lib": ["ES2021"],
+    "noFallthroughCasesInSwitch": true,
+    "pretty": true,
+    "sourceMap": false,
+    "rootDir": ".",
+    "outDir": "build",
+    "noEmitOnError": true,
+
+    "outDir": "./dist/",
+    "module": "commonjs",
+    "allowJs": true,
+    "moduleResolution": "node",
+
+    "allowSyntheticDefaultImports": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+  },
+  "exclude": [
+    "build",
+    "node_modules"
+  ],
+  "include": [
+    "index.ts"
+  ]
+}
