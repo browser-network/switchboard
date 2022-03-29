@@ -31,6 +31,16 @@ will not be able to join the network. So a constantly evolving network, as the
 network is intended to be, requires at least one switching service running at
 any point in time.
 
+## Features
+
+* **No websockets** -- This switching scheme works by regular HTTP request only.
+  That means no extra libraries and trivial switchboard implementations. It
+  also means the network doesn't depend on the switchboard to stay alive. Once
+  the network is up and running, it stays healthy without the help of a
+  switchboard. The switchboard is just a gatekeeper to let new nodes find the
+  network. Picture it like an old man who can't lift that much but can open the
+  gate :)
+
 ## Running
 
 You can skip installation entirely and just run this with:
