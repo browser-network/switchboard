@@ -2,8 +2,8 @@
 
 import http from 'http'
 
-const MAX_NEGOTIATIONS = 20
-const MAX_NEGOTIATION_AGE = 1000 * 15
+const MAX_NEGOTIATIONS = 500
+const MAX_NEGOTIATION_AGE = 1000 * 60 * 3
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
@@ -38,12 +38,12 @@ type Negotiation =
   Offer |
   Answer
 
-let book: { [networkId: string]: { [clientId: string]: Negotiation }} = {}
+type Book = { [networkId: string]: { [address: string]: Negotiation }}
+let book: Book = {}
 
 const server = http.createServer((req, res) => {
 
   const ok = (json: Negotiation[]) => {
-    console.log('returning ok:', json.map(j => [j.type, j.address]))
     res.writeHead(200, HEADERS)
     res.end(JSON.stringify(json))
   }
@@ -99,19 +99,32 @@ const server = http.createServer((req, res) => {
     }
 
     // Now it's time to process the negotiation
-    const { address, networkId } = negotiation
+    const { address, networkId, connectionId } = negotiation
 
     // Ensure the network exists
     if (!book[networkId]) {
       book[networkId] = {}
     }
 
-    // Send back the pool
-    ok(Object.values(book[networkId]))
+    // Send back the pool. Convenience method for console verbosity.
+    const verboseOk = () => {
+      const okData = Object.values(book[networkId])
+      console.log('returning ok: ' + networkId, okData.map(j => [j.type, j.address]))
+      ok(okData)
+    }
 
-    // TODO: bring back efficiency of intelligent adding/removal
-    // of negotiations from the book.
-    //
+    const getOfferByConId = (conId: string, networkId: string, book: Book): Negotiation => {
+      return Object.values(book[networkId]).find(negotiation => {
+        return negotiation.connectionId === conId && negotiation.type === 'offer'
+      })
+    }
+
+    const getAnswerByConId = (conId: string, networkId: string, book: Book): Negotiation => {
+      return Object.values(book[networkId]).find(negotiation => {
+        return negotiation.connectionId === conId && negotiation.type === 'answer'
+      })
+    }
+
     // Here's the scheme:
     //
     // If we receive an answer, we remove the offer
@@ -125,8 +138,37 @@ const server = http.createServer((req, res) => {
     // the offer with the answer's connectionId from the book. Of course this
     // is after sending back the answer.
 
-    // Add the negotiation to our pool
-    book[networkId][address] = negotiation
+    if (negotiation.type === 'answer') {
+      const relatedOffer = getOfferByConId(connectionId, networkId, book)
+
+      if (relatedOffer) {
+        // remove related offer
+        delete book[networkId][relatedOffer.address]
+      }
+
+      // post this answer
+      book[networkId][address] = negotiation
+
+      // send back book
+      verboseOk()
+    } else {
+      const relatedAnswer = getAnswerByConId(connectionId, networkId, book)
+      // If there's an existing answer to this offer
+      if (relatedAnswer) {
+        // - send back the book with that answer
+        verboseOk()
+        // - remove the answer
+        delete book[networkId][relatedAnswer.address]
+        // - remove the existing offer
+        delete book[networkId][address]
+        // - don't post the new offer
+      } else {
+        // - add this to our book
+        book[networkId][address] = negotiation
+        // - send back the book
+        verboseOk()
+      }
+    }
 
     /** Garbage Collection **/
 
@@ -153,6 +195,7 @@ const server = http.createServer((req, res) => {
       const now = Date.now()
 
       // Loop through each, remembering the most recent
+      // TODO just remember the highest date...
       let mostRecentAddress: string
       let mostRecentDifference: number = Infinity
       for (const address of addresses) {
