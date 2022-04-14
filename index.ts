@@ -18,7 +18,7 @@ const HEADERS = Object.assign({
 
 type NegotiationCommon = {
   type: string
-  clientId: string
+  address: string
   networkId: string
   connectionId: string
   timestamp?: number
@@ -43,7 +43,7 @@ let book: { [networkId: string]: { [clientId: string]: Negotiation }} = {}
 const server = http.createServer((req, res) => {
 
   const ok = (json: Negotiation[]) => {
-    console.log('returning ok:', json.map(j => [j.type, j.clientId]))
+    console.log('returning ok:', json.map(j => [j.type, j.address]))
     res.writeHead(200, HEADERS)
     res.end(JSON.stringify(json))
   }
@@ -81,17 +81,17 @@ const server = http.createServer((req, res) => {
 
     // Just the minimum
     if (!body.sdp) return nope('sdp')
-    if (!body.clientId) return nope('clientId')
+    if (!body.address) return nope('address')
     if (!body.networkId) return nope('networkId')
     if (!body.connectionId) return nope('connectionId')
     if (!['offer', 'answer'].includes(body.type)) return nope('type')
 
-    console.log('receiving request from', body.clientId)
+    console.log('receiving request from', body.address)
 
     // No random objects
     const negotiation: Negotiation = {
       sdp: body.sdp as string,
-      clientId: body.clientId as string,
+      address: body.address as string,
       networkId: body.networkId as string,
       type: body.type as 'answer' | 'offer',
       timestamp: Date.now(),
@@ -99,7 +99,7 @@ const server = http.createServer((req, res) => {
     }
 
     // Now it's time to process the negotiation
-    const { clientId, networkId } = negotiation
+    const { address, networkId } = negotiation
 
     // Ensure the network exists
     if (!book[networkId]) {
@@ -126,15 +126,17 @@ const server = http.createServer((req, res) => {
     // is after sending back the answer.
 
     // Add the negotiation to our pool
-    book[networkId][clientId] = negotiation
+    book[networkId][address] = negotiation
+
+    /** Garbage Collection **/
 
     // Remove old ones from this network. We'll do just the current
     // network.
-    for (const clientId in book[networkId]) {
-      const negotiation = book[networkId][clientId]
+    for (const address in book[networkId]) {
+      const negotiation = book[networkId][address]
 
       if (Date.now() - negotiation.timestamp > MAX_NEGOTIATION_AGE) {
-        delete book[networkId][clientId]
+        delete book[networkId][address]
       }
     }
 
@@ -144,25 +146,25 @@ const server = http.createServer((req, res) => {
     // needs time to go through. And this will only ever happen in an active
     // network. In fact you could even define a network as active by whether
     // this function is running or not.
-    const clientIds = Object.keys(book[networkId])
-    if (clientIds.length > MAX_NEGOTIATIONS) {
+    const addresses = Object.keys(book[networkId])
+    if (addresses.length > MAX_NEGOTIATIONS) {
       // Ok so we're too long. We'll nix the entry with the most recent
       // timestamp
       const now = Date.now()
 
       // Loop through each, remembering the most recent
-      let mostRecentClientId: string
+      let mostRecentAddress: string
       let mostRecentDifference: number = Infinity
-      for (const clientId of clientIds) {
-        const difference = now - book[networkId][clientId].timestamp
+      for (const address of addresses) {
+        const difference = now - book[networkId][address].timestamp
         if (difference < mostRecentDifference) {
-          mostRecentClientId = clientId
+          mostRecentAddress = address
           mostRecentDifference = difference
         }
       }
 
       // Finally, remove the newest entry
-      delete book[mostRecentClientId]
+      delete book[mostRecentAddress]
     }
   })
 })
