@@ -2,8 +2,9 @@
 
 import http from 'http'
 
-const MAX_NEGOTIATIONS = 500
-const MAX_NEGOTIATION_AGE = 1000 * 60 * 3
+const CLEAN_INTERVAL = 1000 * 60 * 1
+const MAX_NEGOTIATIONS_ITEMS_PER_NETWORK = 500
+const MAX_ADDRESS_AGE = 1000 * 30 // Keep it short
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
@@ -38,12 +39,36 @@ type Negotiation =
   Offer |
   Answer
 
-type Book = { [networkId: string]: { [address: string]: Negotiation }}
-let book: Book = {}
+type NegotiationItem = {
+  for: string
+  from: string
+  negotiation: Negotiation
+}
+
+type Request = {
+  networkId: string
+  address: string
+  negotiationItems: NegotiationItem[]
+}
+
+type Response = {
+  addresses: string[] // all the addresses we have on book
+  negotiationItems: NegotiationItem[]
+}
+
+type Book = {
+  [networkId: string]: {
+    addresses: { [address: string]: number } // all addresses we have on file, with their time last seen
+    negotiationItems: NegotiationItem[]
+  }
+}
+
+const book: Book = {}
 
 const server = http.createServer((req, res) => {
 
-  const ok = (json: Negotiation[]) => {
+  const ok = (networkId: string, json: Response) => {
+    console.log('ok for', networkId, json)
     res.writeHead(200, HEADERS)
     res.end(JSON.stringify(json))
   }
@@ -76,139 +101,64 @@ const server = http.createServer((req, res) => {
   req.on('data', chunk => stringifiedBody += chunk)
 
   req.on('end', () => {
-    let body: any
-    try { body = JSON.parse(stringifiedBody) } catch { return nope('json') }
+    let request: Request
+    try { request = JSON.parse(stringifiedBody) } catch { return nope('json') }
 
-    // Just the minimum
-    if (!body.sdp) return nope('sdp')
-    if (!body.address) return nope('address')
-    if (!body.networkId) return nope('networkId')
-    if (!body.connectionId) return nope('connectionId')
-    if (!['offer', 'answer'].includes(body.type)) return nope('type')
+    // Shape check (if only typescript had runtime types)
+    if (!request.address) return nope('address')
+    if (!request.networkId) return nope('networkId')
+    request.negotiationItems.forEach(item => {
+      if (!item.from) return nope('from')
+      if (!item.for) return nope('for')
+      if (!item.negotiation) return nope('negotiation')
+      const negotiation = item.negotiation
+      if (!['offer', 'answer'].includes(negotiation.type)) return nope('type')
+      if (!negotiation.connectionId) return nope('connectionId')
+      if (!negotiation.sdp) return nope('sdp')
+    })
 
-    console.log('receiving request from', body.address)
+    // The switchboard's actions
+    // Upon getting a request:
+    // 1) Take the address, and bring it into our list of addresses
+    //   { [address: string]: number }
+    // 2) Add the negotiationItems to an array
+    //  * Don't need to dedup or nothin, each will only be sent once.
+    // 3) Cull the expired addresses and networks
+    // 4) Accumulate negotiationItems for the requesting address
+    // 5) Send back response with all addresses and accumulated negotiationItems
 
-    // No random objects
-    const negotiation: Negotiation = {
-      sdp: body.sdp as string,
-      address: body.address as string,
-      networkId: body.networkId as string,
-      type: body.type as 'answer' | 'offer',
-      timestamp: Date.now(),
-      connectionId: body.connectionId
-    }
-
-    // Now it's time to process the negotiation
-    const { address, networkId, connectionId } = negotiation
-
-    // Ensure the network exists
-    if (!book[networkId]) {
-      book[networkId] = {}
-    }
-
-    // Send back the pool. Convenience method for console verbosity.
-    const verboseOk = () => {
-      const okData = Object.values(book[networkId])
-      console.log('returning ok: ' + networkId, okData.map(j => [j.type, j.address]))
-      ok(okData)
-    }
-
-    const getOfferByConId = (conId: string, networkId: string, book: Book): Negotiation => {
-      return Object.values(book[networkId]).find(negotiation => {
-        return negotiation.connectionId === conId && negotiation.type === 'offer'
-      })
-    }
-
-    const getAnswerByConId = (conId: string, networkId: string, book: Book): Negotiation => {
-      return Object.values(book[networkId]).find(negotiation => {
-        return negotiation.connectionId === conId && negotiation.type === 'answer'
-      })
-    }
-
-    // Here's the scheme:
-    //
-    // If we receive an answer, we remove the offer
-    // that answer is in response to and post the answer.
-    // This will ensure nobody else tries to connect to that offer
-    // for the immediate time being to preserve them from waiting
-    // on a futile connection.
-    //
-    // If we receive an offer and there's an existing answer to that offer,
-    // then we assume the two will connect and we remove both the answer and
-    // the offer with the answer's connectionId from the book. Of course this
-    // is after sending back the answer.
-
-    if (negotiation.type === 'answer') {
-      const relatedOffer = getOfferByConId(connectionId, networkId, book)
-
-      if (relatedOffer) {
-        // remove related offer
-        delete book[networkId][relatedOffer.address]
-      }
-
-      // post this answer
-      book[networkId][address] = negotiation
-
-      // send back book
-      verboseOk()
-    } else {
-      const relatedAnswer = getAnswerByConId(connectionId, networkId, book)
-      // If there's an existing answer to this offer
-      if (relatedAnswer) {
-        // - send back the book with that answer
-        verboseOk()
-        // - remove the answer
-        delete book[networkId][relatedAnswer.address]
-        // - remove the existing offer
-        delete book[networkId][address]
-        // - don't post the new offer
-      } else {
-        // - add this to our book
-        book[networkId][address] = negotiation
-        // - send back the book
-        verboseOk()
+    // First We make sure the network has been seen before and set it up if it hasn't
+    if (!book[request.networkId]) {
+      book[request.networkId] = {
+        addresses: {},
+        negotiationItems: []
       }
     }
 
-    /** Garbage Collection **/
+    // 1) Add address to our list
+    book[request.networkId].addresses[request.address] = Date.now()
 
-    // Remove old ones from this network. We'll do just the current
-    // network.
-    for (const address in book[networkId]) {
-      const negotiation = book[networkId][address]
+    // 2) Add negotiationItems to our list
+    book[request.networkId].negotiationItems.push(...request.negotiationItems)
 
-      if (Date.now() - negotiation.timestamp > MAX_NEGOTIATION_AGE) {
-        delete book[networkId][address]
-      }
+    // 3) Clean the expired addresses in this network
+    cleanExpiredAddressesForNetworkId(request.networkId)
+
+    // 4) Accumulate negotiationItems for the requesting address
+    const negotiationItemsForRequester = book[request.networkId].negotiationItems.filter(item => item.for === request.address)
+
+    // 5) Send back response with all addresses and accumulated negotiationItems
+    ok(request.networkId, {
+      addresses: Object.keys(book[request.networkId].addresses),
+      negotiationItems: negotiationItemsForRequester
+    })
+
+    // Now we trim the fat and remove all the oldest negotiationItems
+    const items = book[request.networkId].negotiationItems
+    if (book[request.networkId].negotiationItems.length > MAX_NEGOTIATIONS_ITEMS_PER_NETWORK) {
+      items.splice(MAX_NEGOTIATIONS_ITEMS_PER_NETWORK, items.length)
     }
 
-    // Trim the fat (aka remove negotiations in excess of MAX_NEGOTIATIONS)
-    // Contrary to popular belief, we actually want to trim the _newer_
-    // negotiations. This is because in an active network, the negotiation
-    // needs time to go through. And this will only ever happen in an active
-    // network. In fact you could even define a network as active by whether
-    // this function is running or not.
-    const addresses = Object.keys(book[networkId])
-    if (addresses.length > MAX_NEGOTIATIONS) {
-      // Ok so we're too long. We'll nix the entry with the most recent
-      // timestamp
-      const now = Date.now()
-
-      // Loop through each, remembering the most recent
-      // TODO just remember the highest date...
-      let mostRecentAddress: string
-      let mostRecentDifference: number = Infinity
-      for (const address of addresses) {
-        const difference = now - book[networkId][address].timestamp
-        if (difference < mostRecentDifference) {
-          mostRecentAddress = address
-          mostRecentDifference = difference
-        }
-      }
-
-      // Finally, remove the newest entry
-      delete book[mostRecentAddress]
-    }
   })
 })
 
@@ -216,3 +166,30 @@ const port = process.env.PORT || 5678
 server.listen(port, () => {
   console.log(Date(), 'server listening on port', port)
 })
+
+// We need to periodically clean this otherwise any transient networks will rock this thing. Testing...
+setInterval(() => {
+  for (const networkId in book) {
+    cleanExpiredAddressesForNetworkId(networkId)
+    cleanNetworkIfEmpty(networkId)
+  }
+}, CLEAN_INTERVAL)
+
+function cleanExpiredAddressesForNetworkId(networkId: string) {
+  for (const address in book[networkId].addresses) {
+    const expiry = book[networkId].addresses[address]
+    const isExpired = Date.now() - expiry > MAX_ADDRESS_AGE
+    if (isExpired) {
+      // remove the address from our book
+      delete book[networkId].addresses[address]
+      // and remove all of the addresses lingering negotiations as well
+      book[networkId].negotiationItems = book[networkId].negotiationItems.filter(item => item.from !== address)
+    }
+  }
+}
+
+function cleanNetworkIfEmpty(networkId: string) {
+  if (book[networkId].addresses.length === 0) {
+    delete book[networkId]
+  }
+}
