@@ -2,6 +2,7 @@
 
 import http from 'http'
 
+const CLEAN_INTERVAL = 1000 * 60 * 1
 const MAX_NEGOTIATIONS_ITEMS_PER_NETWORK = 500
 const MAX_ADDRESS_AGE = 1000 * 30 // Keep it short
 
@@ -140,24 +141,8 @@ const server = http.createServer((req, res) => {
     // 2) Add negotiationItems to our list
     book[request.networkId].negotiationItems.push(...request.negotiationItems)
 
-    // 3) Clean the expired addresses
-    for (const address in book[request.networkId].addresses) {
-      const expiry = book[request.networkId].addresses[address]
-      const isExpired = Date.now() - expiry > MAX_ADDRESS_AGE
-      if (isExpired) {
-        // remove the address from our book
-        delete book[request.networkId].addresses[address]
-        // and remove all of the addresses lingering negotiations as well
-        book[request.networkId].negotiationItems = book[request.networkId].negotiationItems.filter(item => item.from !== address)
-      }
-    }
-
-    // 3) Clean the empty networks
-    for (const networkId in book) {
-      if (book[networkId].addresses.length === 0) {
-        delete book[networkId]
-      }
-    }
+    // 3) Clean the expired addresses in this network
+    cleanExpiredAddressesForNetworkId(request.networkId)
 
     // 4) Accumulate negotiationItems for the requesting address
     const negotiationItemsForRequester = book[request.networkId].negotiationItems.filter(item => item.for === request.address)
@@ -181,3 +166,30 @@ const port = process.env.PORT || 5678
 server.listen(port, () => {
   console.log(Date(), 'server listening on port', port)
 })
+
+// We need to periodically clean this otherwise any transient networks will rock this thing. Testing...
+setInterval(() => {
+  for (const networkId in book) {
+    cleanExpiredAddressesForNetworkId(networkId)
+    cleanNetworkIfEmpty(networkId)
+  }
+}, CLEAN_INTERVAL)
+
+function cleanExpiredAddressesForNetworkId(networkId: string) {
+  for (const address in book[networkId].addresses) {
+    const expiry = book[networkId].addresses[address]
+    const isExpired = Date.now() - expiry > MAX_ADDRESS_AGE
+    if (isExpired) {
+      // remove the address from our book
+      delete book[networkId].addresses[address]
+      // and remove all of the addresses lingering negotiations as well
+      book[networkId].negotiationItems = book[networkId].negotiationItems.filter(item => item.from !== address)
+    }
+  }
+}
+
+function cleanNetworkIfEmpty(networkId: string) {
+  if (book[networkId].addresses.length === 0) {
+    delete book[networkId]
+  }
+}
