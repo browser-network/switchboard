@@ -189,7 +189,7 @@ function cleanExpiredAddressesForNetworkId(networkId: string) {
 }
 
 function cleanNetworkIfEmpty(networkId: string) {
-  if (book[networkId].addresses.length === 0) {
+  if (Object.keys(book[networkId].addresses).length === 0) {
     delete book[networkId]
   }
 }
