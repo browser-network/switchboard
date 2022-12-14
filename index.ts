@@ -5,6 +5,7 @@ import http from 'http'
 const CLEAN_INTERVAL = 1000 * 60 * 1
 const MAX_NEGOTIATIONS_ITEMS_PER_NETWORK = 500
 const MAX_ADDRESS_AGE = 1000 * 30 // Since last seen. The slowest I've ever made for checks is 5 seconds.
+const MAX_NEGOTIATION_AGE = 1000 * 30 // Even if an address is still on the network, its negotiations shouldn't live forever
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
@@ -45,6 +46,10 @@ type NegotiationItem = {
   negotiation: Negotiation
 }
 
+type NegotiationItemWithTimeStamp = NegotiationItem & {
+  timestamp: number
+}
+
 type Request = {
   networkId: string
   address: string
@@ -53,13 +58,13 @@ type Request = {
 
 type Response = {
   addresses: string[] // all the addresses we have on book
-  negotiationItems: NegotiationItem[]
+  negotiationItems: NegotiationItemWithTimeStamp[]
 }
 
 type Book = {
   [networkId: string]: {
     addresses: { [address: string]: number } // all addresses we have on file, with their time last seen
-    negotiationItems: NegotiationItem[]
+    negotiationItems: NegotiationItemWithTimeStamp[]
   }
 }
 
@@ -139,10 +144,18 @@ const server = http.createServer((req, res) => {
     book[request.networkId].addresses[request.address] = Date.now()
 
     // 2) Add negotiationItems to our list
-    book[request.networkId].negotiationItems.push(...request.negotiationItems)
+    for (const item of request.negotiationItems) {
+      book[request.networkId].negotiationItems.push({
+        ...item,
+        timestamp: Date.now()
+      })
+    }
 
     // 3) Clean the expired addresses in this network
     cleanExpiredAddressesForNetworkId(request.networkId)
+
+    // 3.b) Clean the expired negotiations in this network
+    cleanExpiredNegotiationsForNetworkId(request.networkId)
 
     // 4) Accumulate negotiationItems for the requesting address
     const negotiationItemsForRequester = book[request.networkId].negotiationItems.filter(item => item.for === request.address)
@@ -171,10 +184,13 @@ server.listen(port, () => {
 setInterval(() => {
   for (const networkId in book) {
     cleanExpiredAddressesForNetworkId(networkId)
+    cleanExpiredNegotiationsForNetworkId(networkId) // This will be empty if the network is going to be cleaned
     cleanNetworkIfEmpty(networkId)
   }
 }, CLEAN_INTERVAL)
 
+// If an address hasn't been seen for a while, we'll remove it from the book, and remove all
+// of the negotiations either from that address or for that address
 function cleanExpiredAddressesForNetworkId(networkId: string) {
   for (const address in book[networkId].addresses) {
     const expiry = book[networkId].addresses[address]
@@ -183,12 +199,22 @@ function cleanExpiredAddressesForNetworkId(networkId: string) {
       // remove the address from our book
       delete book[networkId].addresses[address]
 
-      // and remove all of the address` lingering from negotiations as well
+      // and remove all of the address` lingering negotiations as well
       book[networkId].negotiationItems = book[networkId].negotiationItems.filter(item => {
         return item.from !== address && item.for !== address
       })
     }
   }
+}
+
+// We also want to remove any negotiations that have been sitting around for too long. These are meant to be
+// profoundly ephemeral, they should never last for too long at all, even for nodes that are still on the
+// network. If these aren't cleaned, then two nodes that stay on the network for a long time will be using
+// an unnecessary amount of data pulling down negotiations that should be defunct.
+function cleanExpiredNegotiationsForNetworkId(networkId: string) {
+  book[networkId].negotiationItems = book[networkId].negotiationItems.filter(item => {
+    return (Date.now() - item.timestamp) < MAX_NEGOTIATION_AGE
+  })
 }
 
 function cleanNetworkIfEmpty(networkId: string) {
