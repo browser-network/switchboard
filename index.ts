@@ -4,7 +4,7 @@ import http from 'http'
 
 const CLEAN_INTERVAL = 1000 * 60 * 1
 const MAX_NEGOTIATIONS_ITEMS_PER_NETWORK = 500
-const MAX_ADDRESS_AGE = 1000 * 30 // Keep it short
+const MAX_ADDRESS_AGE = 1000 * 30 // Since last seen. The slowest I've ever made for checks is 5 seconds.
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
@@ -182,8 +182,11 @@ function cleanExpiredAddressesForNetworkId(networkId: string) {
     if (isExpired) {
       // remove the address from our book
       delete book[networkId].addresses[address]
-      // and remove all of the addresses lingering negotiations as well
-      book[networkId].negotiationItems = book[networkId].negotiationItems.filter(item => item.from !== address)
+
+      // and remove all of the address` lingering from negotiations as well
+      book[networkId].negotiationItems = book[networkId].negotiationItems.filter(item => {
+        return item.from !== address && item.for !== address
+      })
     }
   }
 }
